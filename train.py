@@ -46,7 +46,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         sys.exit(f"Trying to use sparse adam but it is not installed, please install the correct rasterizer using pip install [3dgs_accel].")
 
     first_iter = 0
-    tb_writer = prepare_output_and_logger(dataset)
+    tb_writer, write_to = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
@@ -149,13 +149,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ema_Ll1depth_for_log = 0.4 * Ll1depth + 0.6 * ema_Ll1depth_for_log
 
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}", "Depth Loss": f"{ema_Ll1depth_for_log:.{7}f}"})
+                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}", "Depth Loss": f"{ema_Ll1depth_for_log:.{7}f}", "Amount": f"{gaussians.get_xyz.shape[0]}"})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
 
             save_training_vis(scene, viewpoint_cam, gaussians, background, render,
-                              pipe, opt, first_iter, iteration)
+                              pipe, opt, first_iter, iteration, write_to)
 
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
@@ -208,11 +208,12 @@ def prepare_output_and_logger(args):
 
     # Create Tensorboard writer
     tb_writer = None
+    write_to = args.model_path
     if TENSORBOARD_FOUND:
         tb_writer = SummaryWriter(args.model_path)
     else:
         print("Tensorboard not available: not logging progress")
-    return tb_writer
+    return tb_writer, write_to
 
 def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, train_test_exp):
     if tb_writer:
@@ -276,17 +277,17 @@ def visualize_depth(depth, near=0.2, far=13):
     return torch.from_numpy(out_depth).float().cuda().permute(2, 0, 1)
 
 
-def save_training_vis(scene: Scene, viewpoint_cam, gaussians, background, render_fn, pipe, opt, first_iter, iteration):
+def save_training_vis(scene: Scene, viewpoint_cam, gaussians, background, render_fn, pipe, opt, first_iter, iteration, write_to):
     from torchvision.utils import save_image, make_grid
     import torch.nn.functional as F
 
-    os.makedirs(os.path.join(args.model_path, "visualize"), exist_ok=True)
+    os.makedirs(os.path.join(write_to, "visualize"), exist_ok=True)
     
     # DEBUG
     viewpoint_cam = scene.getTrainCameras().copy()[12]
     
     with torch.no_grad():
-        if iteration % pipe.save_training_vis_iteration == 0 or iteration == first_iter + 1:
+        if iteration % pipe.save_training_vis_iteration == 0 or iteration == first_iter:
             render_pkg = render(viewpoint_cam, gaussians, pipe, background, use_trained_exp=False, separate_sh=False)
 
             visualization_list = [
@@ -295,6 +296,7 @@ def save_training_vis(scene: Scene, viewpoint_cam, gaussians, background, render
                 visualize_depth(render_pkg["true_depth"]),
                 # (render_pkg["depth_var"] / 0.001).clamp_max(1).repeat(3, 1, 1),
                 render_pkg["opacity"].repeat(3, 1, 1),
+                (render_pkg["accum_grad"] / (opt.densify_grad_threshold * 2) ).clamp(0, 1).repeat(3, 1, 1),
                 # render_pkg["pseudo_normal"] * 0.5 + 0.5,
                 # bbox
                 render_pkg["bbox"]
@@ -304,7 +306,7 @@ def save_training_vis(scene: Scene, viewpoint_cam, gaussians, background, render
             grid = make_grid(grid, nrow=4)
             scale = grid.shape[-2] / 800
             grid = F.interpolate(grid[None], (int(grid.shape[-2]/scale), int(grid.shape[-1]/scale)))[0]
-            save_image(grid, os.path.join(args.model_path, "visualize", f"{iteration:06d}.png"))
+            save_image(grid, os.path.join(write_to, "visualize", f"{iteration:06d}.png"))
 
 
 

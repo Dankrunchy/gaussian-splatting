@@ -86,9 +86,11 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     else:
         colors_precomp = override_color
 
+    accum_grads = torch.nan_to_num( pc.xyz_gradient_accum / pc.denom, 0.0, 0.0, 0.0 )
+
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     if separate_sh:
-        rendered_image, radii, depth_image = rasterizer(
+        rendered_image, radii, depth_image, out_opacity, out_depth, out_bbox, out_grad = rasterizer(
             means3D = means3D,
             means2D = means2D,
             dc = dc,
@@ -97,9 +99,10 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             opacities = opacity,
             scales = scales,
             rotations = rotations,
-            cov3D_precomp = cov3D_precomp)
+            cov3D_precomp = cov3D_precomp,
+            accum_grad = accum_grads)
     else:
-        rendered_image, radii, depth_image = rasterizer(
+        rendered_image, radii, depth_image, out_opacity, out_depth, out_bbox, out_grad = rasterizer(
             means3D = means3D,
             means2D = means2D,
             shs = shs,
@@ -107,7 +110,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             opacities = opacity,
             scales = scales,
             rotations = rotations,
-            cov3D_precomp = cov3D_precomp)
+            cov3D_precomp = cov3D_precomp,
+            accum_grad = accum_grads)
         
     # Apply exposure to rendered image (training only)
     if use_trained_exp:
@@ -122,7 +126,11 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         "viewspace_points": screenspace_points,
         "visibility_filter" : (radii > 0).nonzero(),
         "radii": radii,
-        "depth" : depth_image
+        "depth" : depth_image,
+        "opacity": out_opacity,
+        "true_depth": out_depth,
+        "bbox": out_bbox,
+        "accum_grad": out_grad,
         }
     
     return out
