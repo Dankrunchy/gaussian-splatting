@@ -297,8 +297,7 @@ def save_training_vis(scene: Scene, viewpoint_cam, gaussians, background, render
                 # (render_pkg["depth_var"] / 0.001).clamp_max(1).repeat(3, 1, 1),
                 render_pkg["opacity"].repeat(3, 1, 1),
                 (render_pkg["accum_grad"] / (opt.densify_grad_threshold * 2) ).clamp(0, 1).repeat(3, 1, 1),
-                # render_pkg["pseudo_normal"] * 0.5 + 0.5,
-                # bbox
+                render_pkg["pseudo_normal"] * 0.5 + 0.5,
                 render_pkg["bbox"]
             ]
 

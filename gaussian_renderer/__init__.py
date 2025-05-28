@@ -90,7 +90,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     if separate_sh:
-        rendered_image, radii, depth_image, out_opacity, out_depth, out_bbox, out_grad = rasterizer(
+        rendered_image, radii, depth_image, out_opacity, out_depth, out_bbox, out_grad, out_normal = rasterizer(
             means3D = means3D,
             means2D = means2D,
             dc = dc,
@@ -102,7 +102,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             cov3D_precomp = cov3D_precomp,
             accum_grad = accum_grads)
     else:
-        rendered_image, radii, depth_image, out_opacity, out_depth, out_bbox, out_grad = rasterizer(
+        rendered_image, radii, depth_image, out_opacity, out_depth, out_bbox, out_grad, out_normal = rasterizer(
             means3D = means3D,
             means2D = means2D,
             shs = shs,
@@ -131,6 +131,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         "true_depth": out_depth,
         "bbox": out_bbox,
         "accum_grad": out_grad,
+        "pseudo_normal": out_normal,
         }
     
     return out
