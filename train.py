@@ -154,6 +154,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration == opt.iterations:
                 progress_bar.close()
 
+            save_training_vis(scene, viewpoint_cam, gaussians, background, render,
+                              pipe, opt, first_iter, iteration)
+
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
             if (iteration in saving_iterations):
@@ -250,6 +253,60 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
             tb_writer.add_scalar('total_points', scene.gaussians.get_xyz.shape[0], iteration)
         torch.cuda.empty_cache()
+
+
+def visualize_depth(depth, near=0.2, far=13):
+    import numpy as np
+    import matplotlib
+
+    depth = depth[0].detach().cpu().numpy()
+    colormap = matplotlib.colormaps['turbo']
+    curve_fn = lambda x: -np.log(x + np.finfo(np.float32).eps)
+    eps = np.finfo(np.float32).eps
+    near = near if near else depth.min()
+    far = far if far else depth.max()
+    near -= eps
+    far += eps
+    near, far, depth = [curve_fn(x) for x in [near, far, depth]]
+    depth = np.nan_to_num(
+        np.clip((depth - np.minimum(near, far)) / np.abs(far - near), 0, 1))
+    vis = colormap(depth)[:, :, :3]
+
+    out_depth = np.clip(np.nan_to_num(vis), 0., 1.)
+    return torch.from_numpy(out_depth).float().cuda().permute(2, 0, 1)
+
+
+def save_training_vis(scene: Scene, viewpoint_cam, gaussians, background, render_fn, pipe, opt, first_iter, iteration):
+    from torchvision.utils import save_image, make_grid
+    import torch.nn.functional as F
+
+    os.makedirs(os.path.join(args.model_path, "visualize"), exist_ok=True)
+    
+    # DEBUG
+    viewpoint_cam = scene.getTrainCameras().copy()[12]
+    
+    with torch.no_grad():
+        if iteration % pipe.save_training_vis_iteration == 0 or iteration == first_iter + 1:
+            render_pkg = render(viewpoint_cam, gaussians, pipe, background, use_trained_exp=False, separate_sh=False)
+
+            visualization_list = [
+                render_pkg["render"],
+                viewpoint_cam.original_image.cuda(),
+                visualize_depth(render_pkg["true_depth"]),
+                # (render_pkg["depth_var"] / 0.001).clamp_max(1).repeat(3, 1, 1),
+                render_pkg["opacity"].repeat(3, 1, 1),
+                # render_pkg["pseudo_normal"] * 0.5 + 0.5,
+                # bbox
+                render_pkg["bbox"]
+            ]
+
+            grid = torch.stack(visualization_list, dim=0)
+            grid = make_grid(grid, nrow=4)
+            scale = grid.shape[-2] / 800
+            grid = F.interpolate(grid[None], (int(grid.shape[-2]/scale), int(grid.shape[-1]/scale)))[0]
+            save_image(grid, os.path.join(args.model_path, "visualize", f"{iteration:06d}.png"))
+
+
 
 if __name__ == "__main__":
     # Set up command line argument parser
