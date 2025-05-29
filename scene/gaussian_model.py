@@ -11,6 +11,7 @@
 
 import torch
 import numpy as np
+from numpy.typing import NDArray
 from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
 from torch import nn
 import os
@@ -22,10 +23,20 @@ from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 
+from typing import NewType, TYPE_CHECKING
+
 try:
     from diff_gaussian_rasterization import SparseGaussianAdam
 except:
     pass
+
+if TYPE_CHECKING:
+    # For IDE autocomplete
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+    except ImportError:
+        SummaryWriter = NewType("SummaryWriter", object)
+
 
 class GaussianModel:
 
@@ -449,11 +460,15 @@ class GaussianModel:
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii)
 
-    def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, radii):
+    def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, radii, tb_writer: "SummaryWriter" = None, iteration: int = 0):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
 
         self.tmp_radii = radii
+        
+        # DEBUG
+        self.debug_histograms( iteration, grads, max_grad=max_grad, tb_writer=tb_writer)
+        
         self.densify_and_clone(grads, max_grad, extent)
         self.densify_and_split(grads, max_grad, extent)
 
@@ -471,3 +486,74 @@ class GaussianModel:
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+
+    @torch.no_grad()
+    def debug_histograms(self, iteration: int, grads = None, bin_count: int = 1000, 
+                         max_grad: float = None, tb_writer: "SummaryWriter" = None):
+        """For Debugging and Introspection
+
+        Args:
+            iteration (int): Which iteration during traniing
+            grads (_type_, optional): Accumulated gradient. If None then calculated on the fly. Defaults to None.
+            bin_count (int, optional): Amount of bins for histograms. Defaults to 1000.
+            max_grad (float, optional): The densification threshold. If None not drawn in graphic. Defaults to None.
+            tb_writer (SummaryWriter, optional): Tensorboard Writer. Defaults to None.
+        """
+        def add_to_tb_writer(title: str, values: NDArray):
+            if tb_writer:
+                values = values.astype(float).reshape(-1)
+                sum_sq = values.dot(values)
+                
+                tb_writer.add_histogram_raw(
+                    tag=f"scene/{title}",
+                    min=values.min(),
+                    max=values.max(),
+                    num=len(values),
+                    sum=values.sum(),
+                    sum_squares=sum_sq,
+                    bucket_limits=bins[1:].tolist(),
+                    bucket_counts=counts.tolist(),
+                    global_step=iteration)
+        
+        if grads is None:
+            grads = self.xyz_gradient_accum / self.denom
+            # if division by zero in self.denom
+            grads[grads.isnan()] = 1e-12
+        
+        _grads_np = grads.cpu().numpy()
+        counts, bins = np.histogram(_grads_np, bins=bin_count)
+        
+        add_to_tb_writer('Accumulated Gradients Distribution', _grads_np)
+        
+        # scale distribution
+        _scales_np = self.get_scaling.cpu().numpy()
+        counts, bins = np.histogram(_scales_np, bins=bin_count)
+        
+        add_to_tb_writer('Scale Distribution', _scales_np)
+        
+        # density distribution
+        _density_np = self.get_opacity.cpu().numpy()
+        counts, bins = np.histogram(_density_np, bins=bin_count)
+        
+        add_to_tb_writer('Density Distribution', _density_np)
+        
+        # Plot scale/grad correlation
+        import matplotlib.pyplot as plt
+        f = plt.figure(figsize=(12, 8))
+        plt.scatter( grads.detach().cpu().numpy(), torch.prod(self.get_scaling, dim=-1).detach().cpu().numpy(),
+                     s=2.5 )
+        plt.grid(True, which="both", linestyle="--", linewidth=0.5)  # Background grid
+        plt.xscale("log") # gradients can get very big, so use log scale
+        plt.yscale("log")
+        
+        if max_grad:
+            plt.axvline(x=max_grad, color='red', linestyle='--', linewidth=1.0, label="Densification Threshold")
+            plt.legend()
+        
+        plt.title(f'Accumulated Gradient - Scale Correlation, iteration {iteration}')
+        plt.xlabel("Accumulated Grad")
+        plt.ylabel('"Volume" (product of all axes)')
+        plt.close()
+        
+        if tb_writer:
+            tb_writer.add_figure("Accumulated Gradient - Scale Correlation", f, global_step=iteration)

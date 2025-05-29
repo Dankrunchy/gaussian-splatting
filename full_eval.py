@@ -45,7 +45,8 @@ if not args.skip_training or not args.skip_rendering:
     parser.add_argument("--deepblending", "-db", required=True, type=str)
     args = parser.parse_args()
 if not args.skip_training:
-    common_args = " --disable_viewer --quiet --eval --test_iterations -1 "
+    # common_args = " --disable_viewer --quiet --eval --test_iterations -1 "
+    common_args = " --disable_viewer --quiet --eval" # we want full testing for a quality baseline
     
     if args.aa:
         common_args += " --antialiasing "

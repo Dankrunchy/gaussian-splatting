@@ -69,7 +69,7 @@ class PipelineParams(ParamGroup):
         self.compute_cov3D_python = False
         self.debug = False
         self.antialiasing = False
-        self.save_training_vis_iteration = 100
+        self.save_training_vis_iteration = 1000000
         super().__init__(parser, "Pipeline Parameters")
 
 class OptimizationParams(ParamGroup):

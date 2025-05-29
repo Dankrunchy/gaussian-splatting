@@ -22,6 +22,10 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+
+from torchvision.utils import save_image, make_grid
+import torch.nn.functional as F
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -171,7 +175,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
+                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii, tb_writer, iteration)
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
@@ -232,15 +236,31 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 l1_test = 0.0
                 psnr_test = 0.0
                 for idx, viewpoint in enumerate(config['cameras']):
-                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
+                    render_pkg = renderFunc(viewpoint, scene.gaussians, *renderArgs)
+                    image = torch.clamp(render_pkg["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
                     if train_test_exp:
                         image = image[..., image.shape[-1] // 2:]
                         gt_image = gt_image[..., gt_image.shape[-1] // 2:]
                     if tb_writer and (idx < 5):
-                        tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
-                        if iteration == testing_iterations[0]:
-                            tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
+                        visualization_list = [
+                            image,
+                            gt_image,
+                            torch.abs(image - gt_image), # L1 Loss
+                            visualize_depth(render_pkg["true_depth"]),
+                            # (render_pkg["depth_var"] / 0.001).clamp_max(1).repeat(3, 1, 1),
+                            render_pkg["opacity"].repeat(3, 1, 1),
+                            (render_pkg["accum_grad"] / (args.densify_grad_threshold * 2) ).clamp(0, 1).repeat(3, 1, 1),
+                            render_pkg["pseudo_normal"] * 0.5 + 0.5,
+                            render_pkg["bbox"]
+                        ]
+
+                        grid = torch.stack(visualization_list, dim=0)
+                        grid = make_grid(grid, nrow=4)
+                        
+                        tb_writer.add_images(config['name'] + "/view_{}/render".format(viewpoint.image_name), grid[None], global_step=iteration)
+                        # if iteration == testing_iterations[0]:
+                        #     tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
                     l1_test += l1_loss(image, gt_image).mean().double()
                     psnr_test += psnr(image, gt_image).mean().double()
                 psnr_test /= len(config['cameras'])
@@ -278,9 +298,6 @@ def visualize_depth(depth, near=0.2, far=13):
 
 
 def save_training_vis(scene: Scene, viewpoint_cam, gaussians, background, render_fn, pipe, opt, first_iter, iteration, write_to):
-    from torchvision.utils import save_image, make_grid
-    import torch.nn.functional as F
-
     os.makedirs(os.path.join(write_to, "visualize"), exist_ok=True)
     
     # DEBUG
@@ -293,6 +310,7 @@ def save_training_vis(scene: Scene, viewpoint_cam, gaussians, background, render
             visualization_list = [
                 render_pkg["render"],
                 viewpoint_cam.original_image.cuda(),
+                torch.abs(render_pkg["render"] - viewpoint_cam.original_image.cuda()), # L1 Loss
                 visualize_depth(render_pkg["true_depth"]),
                 # (render_pkg["depth_var"] / 0.001).clamp_max(1).repeat(3, 1, 1),
                 render_pkg["opacity"].repeat(3, 1, 1),
@@ -310,6 +328,7 @@ def save_training_vis(scene: Scene, viewpoint_cam, gaussians, background, render
 
 
 if __name__ == "__main__":
+    import numpy as np
     # Set up command line argument parser
     parser = ArgumentParser(description="Training script parameters")
     lp = ModelParams(parser)
@@ -319,7 +338,9 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
+    test_iterations = ((np.arange(12)+1)*2500).tolist() # every 2500 iterations
+    test_iterations.append(7000)
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=test_iterations) # [7_000, 30_000]
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
