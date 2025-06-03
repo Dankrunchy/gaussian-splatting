@@ -17,6 +17,7 @@ mipnerf360_outdoor_scenes = ["bicycle", "flowers", "garden", "stump", "treehill"
 mipnerf360_indoor_scenes = ["room", "counter", "kitchen", "bonsai"]
 tanks_and_temples_scenes = ["truck", "train"]
 deep_blending_scenes = ["drjohnson", "playroom"]
+nerf_synthetic_scenes = ["chair", "drums", "ficus", "hotdog", "lego", "materials", "mic", "ship"]
 
 parser = ArgumentParser(description="Full evaluation script parameters")
 parser.add_argument("--skip_training", action="store_true")
@@ -43,6 +44,7 @@ if not args.skip_training or not args.skip_rendering:
     parser.add_argument('--mipnerf360', "-m360", required=True, type=str)
     parser.add_argument("--tanksandtemples", "-tat", required=True, type=str)
     parser.add_argument("--deepblending", "-db", required=True, type=str)
+    parser.add_argument("--nerfsynthetic", "-ns", required=False, default="", type=str)
     args = parser.parse_args()
 if not args.skip_training:
     # common_args = " --disable_viewer --quiet --eval --test_iterations -1 "
@@ -80,8 +82,20 @@ if not args.skip_training:
         os.system("python train.py -s " + source + " -m " + args.output_path + "/" + scene + common_args)
     db_timing = (time.time() - start_time)/60.0
 
+    ns = args.nerfsynthetic
+    if ns:
+        all_scenes.extend(nerf_synthetic_scenes)
+        start_time = time.time()
+        for scene in nerf_synthetic_scenes:
+            source = ns + "/" + scene
+            os.system("python train.py -s " + source + " -m " + args.output_path + "/" + scene + common_args)
+        ns_timing = (time.time() - start_time)/60.0
+
 with open(os.path.join(args.output_path,"timing.txt"), 'w') as file:
-    file.write(f"m360: {m360_timing} minutes \n tandt: {tandt_timing} minutes \n db: {db_timing} minutes\n")
+    if ns:
+        file.write(f"m360: {m360_timing} minutes \ntandt: {tandt_timing} minutes \ndb: {db_timing} minutes\nns: {ns_timing}")
+    else:
+        file.write(f"m360: {m360_timing} minutes \ntandt: {tandt_timing} minutes \ndb: {db_timing} minutes\n")
 
 if not args.skip_rendering:
     all_sources = []

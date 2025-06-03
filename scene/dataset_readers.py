@@ -22,6 +22,8 @@ from pathlib import Path
 from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
+from torch import Tensor
+
 
 class CameraInfo(NamedTuple):
     uid: int
@@ -30,6 +32,7 @@ class CameraInfo(NamedTuple):
     FovY: np.array
     FovX: np.array
     depth_params: dict
+    image: Tensor
     image_path: str
     image_name: str
     depth_path: str
@@ -47,11 +50,11 @@ class SceneInfo(NamedTuple):
 
 def getNerfppNorm(cam_info):
     def get_center_and_diag(cam_centers):
-        cam_centers = np.hstack(cam_centers)
-        avg_cam_center = np.mean(cam_centers, axis=1, keepdims=True)
-        center = avg_cam_center
-        dist = np.linalg.norm(cam_centers - center, axis=0, keepdims=True)
-        diagonal = np.max(dist)
+        cam_centers     = np.hstack(cam_centers)
+        avg_cam_center  = np.mean(cam_centers, axis=1, keepdims=True)
+        center          = avg_cam_center
+        dist            = np.linalg.norm(cam_centers - center, axis=0, keepdims=True)
+        diagonal        = np.max(dist)
         return center.flatten(), diagonal
 
     cam_centers = []
@@ -110,7 +113,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, depths_params, images_fold
         depth_path = os.path.join(depths_folder, f"{extr.name[:-n_remove]}.png") if depths_folder != "" else ""
 
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, depth_params=depth_params,
-                              image_path=image_path, image_name=image_name, depth_path=depth_path,
+                              iamge=None, image_path=image_path, image_name=image_name, depth_path=depth_path,
                               width=width, height=height, is_test=image_name in test_cam_names_list)
         cam_infos.append(cam_info)
 
@@ -265,7 +268,7 @@ def readCamerasFromTransforms(path, transformsfile, depths_folder, white_backgro
             depth_path = os.path.join(depths_folder, f"{image_name}.png") if depths_folder != "" else ""
 
             cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX,
-                            image_path=image_path, image_name=image_name,
+                            image=image, image_path=image_path, image_name=image_name,
                             width=image.size[0], height=image.size[1], depth_path=depth_path, depth_params=None, is_test=is_test))
             
     return cam_infos
